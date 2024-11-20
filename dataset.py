@@ -48,7 +48,6 @@ class Dataset(torch.utils.data.Dataset):
                     class_id = self.class_mapping[class_name]
                     bbox = obj.find('bndbox')
 
-                    # Sử dụng float() thay vì int() vì tọa độ có thể có giá trị thập phân
                     xmin = float(bbox.find('xmin').text)
                     ymin = float(bbox.find('ymin').text)
                     xmax = float(bbox.find('xmax').text)
@@ -72,7 +71,7 @@ class Dataset(torch.utils.data.Dataset):
             bbox_width = (xmax - xmin) / width
             bbox_height = (ymax - ymin) / height
             
-            # Thêm image_id vào dữ liệu YOLO
+            #add annotations to yolo_annotations list
             yolo_annotations.append(f"{annotation['image_id']} {class_id} {center_x} {center_y} {bbox_width} {bbox_height}")
         
         return yolo_annotations
@@ -81,15 +80,14 @@ class Dataset(torch.utils.data.Dataset):
         annotations = self.custom_annotations()  # Lấy annotations từ custom_annotations()
         yolo_annotations = self.convert_to_yolo_format(annotations)
 
-        # Mở và ghi vào file train.txt
+        #open and write train.txt file
         with open(self.train_txt_path, 'w') as f:
             for annotation in yolo_annotations:
                 f.write(f"{annotation}\n")
 
-        print(f"Đã cập nhật {self.train_txt_path} với các bounding box theo định dạng YOLO.")
 
 if __name__ == '__main__':
-    # Đường dẫn đến thư mục chứa annotations và images
+    #path to directory
     annotations_dir = r'C:\Users\khiem\Downloads\NCKH\Task PASCAL VOC2012\VOCtrainval_11-May-2012 (1)\VOCdevkit\VOC2012\Annotations'
     images_dir = r'C:\Users\khiem\Downloads\NCKH\Task PASCAL VOC2012\VOCtrainval_11-May-2012 (1)\VOCdevkit\VOC2012\JPEGImages'
     train_txt_path = r'C:\Users\khiem\Downloads\NCKH\Task PASCAL VOC2012\VOCtrainval_11-May-2012 (1)\VOCdevkit\VOC2012\ImageSets\Main\train.txt'
@@ -101,4 +99,4 @@ if __name__ == '__main__':
         class_mapping=class_mapping
     )
     
-    dataset.update_train_txt()  # Cập nhật file train.txt với các bounding box theo định dạng YOLO
+    dataset.update_train_txt()  #update train.txt file
