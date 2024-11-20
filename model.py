@@ -1,95 +1,112 @@
-import numpy as np 
+import pandas as pd
+import xml.etree.ElementTree as ET
+import os
 import torch
-from torch.nn import nn
-
-yolov1_config = [
-    {"type": "conv", "filters": 64, "kernel_size": 7, "stride": 2, "padding": 3},
-    {"type": "maxpool", "kernel_size": 2, "stride": 2},
-
-    {"type": "conv", "filters": 192, "kernel_size": 3, "stride": 1, "padding": 1},
-    {"type": "maxpool", "kernel_size": 2, "stride": 2},
-
-    {"type": "conv", "filters": 128, "kernel_size": 1, "stride": 1, "padding": 0},
-    {"type": "conv", "filters": 256, "kernel_size": 3, "stride": 1, "padding": 1},
-    {"type": "conv", "filters": 256, "kernel_size": 1, "stride": 1, "padding": 0},
-    {"type": "conv", "filters": 512, "kernel_size": 3, "stride": 1, "padding": 1},
-    {"type": "maxpool", "kernel_size": 2, "stride": 2},
-
-    {"type": "conv", "filters": 256, "kernel_size": 1, "stride": 1, "padding": 0},
-    {"type": "conv", "filters": 512, "kernel_size": 3, "stride": 1, "padding": 1},
-    {"type": "conv", "filters": 256, "kernel_size": 1, "stride": 1, "padding": 0},
-    {"type": "conv", "filters": 512, "kernel_size": 3, "stride": 1, "padding": 1},
-    {"type": "conv", "filters": 256, "kernel_size": 1, "stride": 1, "padding": 0},
-    {"type": "conv", "filters": 512, "kernel_size": 3, "stride": 1, "padding": 1},
-    {"type": "conv", "filters": 512, "kernel_size": 1, "stride": 1, "padding": 0},
-    {"type": "conv", "filters": 1024, "kernel_size": 3, "stride": 1, "padding": 1},
-    {"type": "maxpool", "kernel_size": 2, "stride": 2},
-
-    {"type": "conv", "filters": 512, "kernel_size": 1, "stride": 1, "padding": 0},
-    {"type": "conv", "filters": 1024, "kernel_size": 3, "stride": 1, "padding": 1},
-    {"type": "conv", "filters": 512, "kernel_size": 1, "stride": 1, "padding": 0},
-    {"type": "conv", "filters": 1024, "kernel_size": 3, "stride": 1, "padding": 1},
-    {"type": "conv", "filters": 1024, "kernel_size": 3, "stride": 1, "padding": 1},
-    {"type": "conv", "filters": 1024, "kernel_size": 3, "stride": 2, "padding": 1},
-
-    {"type": "conv", "filters": 1024, "kernel_size": 3, "stride": 1, "padding": 1},
-    {"type": "conv", "filters": 1024, "kernel_size": 3, "stride": 1, "padding": 1},
-]
+import torch.utils.data
+from PIL import Image
+from config import class_mapping
+import yaml
 
 
+class Dataset(torch.utils.data.Dataset):
 
-class Block(nn.Module):
-    def __init__(self, in_channels, out_channels, **kwagrs):
-        super(Block, self).__init__()
-        self.conv2D = nn.Conv2d(in_channels, out_channels, bias  = False, **kwagrs)
-        self.batchnorm = nn.BatchNorm2d(out_channels) 
-        self.leaky = nn.LeakyReLU(0.1)
+    def __init__(self, annotations_dir, images_dir, yaml_dir, class_mapping):
+        self.annotations_dir = annotations_dir
+        self.images_dir = images_dir
+        self.class_mapping = class_mapping
+        self.yaml_dir = yaml_dir
 
-    def forward(self, x): 
-        return self.leaky(self.batchnorm(self.conv2D(x)))
+    def custom_annotations(self):
+        annotations = []
+        for xml_file in os.listdir(self.annotations_dir):
+            if xml_file.endswith(".xml"):
+                annotation_path = os.path.join(self.annotations_dir, xml_file)
+                tree = ET.parse(annotation_path)
+                root = tree.getroot()
 
+                filename_element = root.find("filename")
+                if filename_element is not None:
+                    image_id = filename_element.text
+                else:
+                    continue
+                for obj in root.findall("object"):
+                    name_element = obj.find("name")
+                    if name_element is not None:
+                        class_name = name_element.text
+                        class_id = self.class_mapping[class_name]
+                    else:
+                        continue
+                    bbox = obj.find("bndbox")
+                    xmin = int(bbox.find("xmin").text)
+                    ymin = int(bbox.find("ymin").text)
+                    xmax = int(bbox.find("xmax").text)
+                    ymax = int(bbox.find("ymax").text)
 
-class Pool2D(nn.Module):
-    def __init__(self, kernel_size, stride, padding, **kwargs):
-        super(self, Pool2D).__init()
-        self.pool = nn.MaxPool2d(kernel_size = kernel_size, stride = stride, padding = padding, **kwargs)
-    def forward(self, X):
-        return self.pool(X)
+                    annotations.append(
+                        {
+                            "image_id": image_id,
+                            "class_id": class_id,
+                            "bbox": [xmin, ymin, xmax, ymax],
+                        }
+                    )
+        return annotations
 
+    def convert_to_yolo_format(self, annotations):
+        yolo_annotations = []
+        for annotation in annotations:
+            image_path = os.path.join(self.images_dir, annotation["image_id"])
+            image = Image.open(image_path)
+            width, height = image.size
 
-class Yolov1(nn.Module):
-    def __init__(self, kernels = 3, **kwargs):
-        self.architecture = yolov1_config
-        self.layer = self._create_layer_(self.architecture) 
-        self.fcs = self._create_fcs_()
+            class_id = annotation["class_id"]
+            xmin, ymin, xmax, ymax = annotation["bbox"]
 
-    def _create_layer_(self, config):
-        layer = []
-        in_channels = 3
-        for cf in config:
-            if cf['type'] == 'conv': 
-                self.layer.append(
-                        Block(in_channels = in_channels, 
-                        out_channels =cf['filters'], 
-                        kernel_size = cf['kernels_size'],
-                        stride = cf['stride'], 
-                        padding = cf['padding']
-                        ))
-            elif cf['type'] == 'maxpool':
-                self.layer.append(
-                        Pool2D(in_channels= in_channels, 
-                        kernels_size = cf['kernel_size'], 
-                        stride = cf['stride'], 
-                        ))
-        return nn.Sequential(*layer)
+            center_x = (xmin + xmax) / 2.0 / width
+            center_y = (ymin + ymax) / 2.0 / height
+            bbox_width = (xmax - xmin) / width
+            bbox_height = (ymax - ymin) / height
 
-    def _create_fcs_(self, split_size, num_boxes, num_classes):
-        S, B, C = split_size, num_boxes, num_classes
-        return nn.Sequential(
-            nn.Flatten(),
-            nn.Linear(1024*S*S, 496),
-            nn.Dropout(0.0),
-            nn.LeakyReLU(0.1),
-            nn.Linear(496, S*S*(C+B*5)),
+            yolo_annotations.append(
+                f"{class_id} {center_x} {center_y} {bbox_width} {bbox_height}"
             )
 
+        return yolo_annotations
+
+    def save_yolo_annotations(self, yolo_annotations):
+        yaml_files = [
+            f
+            for f in os.listdir(self.yaml_dir)
+            if f.endswith(".yaml") or f.endswith(".yml")
+        ]
+        for yaml_file in yaml_files:
+            if "train" in yaml_file or "val" in yaml_file:
+                yaml_path = os.path.join(self.yaml_dir, yaml_file)
+                with open(yaml_path, "r") as f:
+                    data = yaml.safe_load(f)
+                for annotation in yolo_annotations:
+                    image_id = annotation["image_id"]
+                    yolo_annotation = annotation["annotation"]
+
+                    for entry in data:
+                        if entry["id_img"] == image_id:
+                            if "annotations" not in entry:
+                                entry["annotations"] = []
+                            entry["annotations"].append(yolo_annotation)
+
+                with open(yaml_path, "w") as f:
+                    yaml.safe_dump(data, f)
+
+
+if __name__ == "__main__":
+    # Example usage
+    annotations_dir = "path/to/your/annotations_dir"
+    images_dir = "path/to/your/images_dir"
+    yaml_dir = "path/to/your/yaml_dir"
+    class_mapping = {"class1": 0, "class2": 1}  # Example class mapping
+    yolo_annotations = [
+        {"image_id": 1, "annotation": "annotation1"},
+        {"image_id": 2, "annotation": "annotation2"},
+    ]
+
+    dataset = Dataset(annotations_dir, images_dir, yaml_dir, class_mapping)
+    dataset.save_yolo_annotations(yolo_annotations)
