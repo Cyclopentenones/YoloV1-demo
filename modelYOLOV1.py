@@ -1,112 +1,120 @@
-import pandas as pd
-import xml.etree.ElementTree as ET
-import os
 import torch
-import torch.utils.data
-from PIL import Image
-from config import class_mapping
-import yaml
+import torch.nn as nn
+
+architecture_config = [
+    (7, 64, 2, 3),
+    "M",
+    (3, 192, 1, 1),
+    "M",
+    (1, 128, 1, 0),
+    (3, 256, 1, 1),
+    (1, 256, 1, 0),
+    (3, 512, 1, 1),
+    "M",
+    [(1, 256, 1, 0), (3, 512, 1, 1), 4],
+    (1, 512, 1, 0),
+    (3, 1024, 1, 1),
+    "M",
+    [(1, 512, 1, 0), (3, 1024, 1, 1), 2],
+    (3, 1024, 1, 1),
+    (3, 1024, 2, 1),
+    (3, 1024, 1, 1),
+    (3, 1024, 1, 1),
+]
 
 
-class Dataset(torch.utils.data.Dataset):
+class CNNBlock(nn.Module):
+    def __init__(self, in_channels, out_channels, **kwargs):
+        super(CNNBlock, self).__init__()
+        self.conv = nn.Conv2d(in_channels, out_channels, bias=False, **kwargs)
+        self.batchnorm = nn.BatchNorm2d(out_channels)
+        self.leakyrelu = nn.LeakyReLU(0.1)
 
-    def __init__(self, annotations_dir, images_dir, yaml_dir, class_mapping):
-        self.annotations_dir = annotations_dir
-        self.images_dir = images_dir
-        self.class_mapping = class_mapping
-        self.yaml_dir = yaml_dir
+    def forward(self, x):
+        return self.leakyrelu(self.batchnorm(self.conv(x)))
 
-    def custom_annotations(self):
-        annotations = []
-        for xml_file in os.listdir(self.annotations_dir):
-            if xml_file.endswith(".xml"):
-                annotation_path = os.path.join(self.annotations_dir, xml_file)
-                tree = ET.parse(annotation_path)
-                root = tree.getroot()
 
-                filename_element = root.find("filename")
-                if filename_element is not None:
-                    image_id = filename_element.text
-                else:
-                    continue
-                for obj in root.findall("object"):
-                    name_element = obj.find("name")
-                    if name_element is not None:
-                        class_name = name_element.text
-                        class_id = self.class_mapping[class_name]
-                    else:
-                        continue
-                    bbox = obj.find("bndbox")
-                    xmin = int(bbox.find("xmin").text)
-                    ymin = int(bbox.find("ymin").text)
-                    xmax = int(bbox.find("xmax").text)
-                    ymax = int(bbox.find("ymax").text)
+class Yolov1(nn.Module):
+    """
+    Yolov1 is a PyTorch implementation of the YOLOv1 (You Only Look Once) object detection model.
+    Attributes:
+        architecture (list): Configuration of the YOLOv1 architecture.
+        in_channels (int): Number of input channels.
+        darknet (nn.Sequential): Convolutional layers of the YOLOv1 model.
+        fcs (nn.Sequential): Fully connected layers of the YOLOv1 model.
+    """
 
-                    annotations.append(
-                        {
-                            "image_id": image_id,
-                            "class_id": class_id,
-                            "bbox": [xmin, ymin, xmax, ymax],
-                        }
+    def __init__(self, in_channels=3, **kwargs):
+        super(Yolov1, self).__init__()
+        self.architecture = architecture_config
+        self.in_channels = in_channels
+        self.darknet = self._create_conv_layers(self.architecture)
+        self.fcs = self._create_fcs(**kwargs)
+
+    def forward(self, x):
+        x = self.darknet(x)
+        return self.fcs(torch.flatten(x, start_dim=1))
+
+    def _create_conv_layers(self, architecture):
+        layers = []
+        in_channels = self.in_channels
+
+        for x in architecture:
+            if type(x) == tuple:
+                layers += [
+                    CNNBlock(
+                        in_channels,
+                        x[1],
+                        kernel_size=x[0],
+                        stride=x[2],
+                        padding=x[3],
                     )
-        return annotations
+                ]
+                in_channels = x[1]
 
-    def convert_to_yolo_format(self, annotations):
-        yolo_annotations = []
-        for annotation in annotations:
-            image_path = os.path.join(self.images_dir, annotation["image_id"])
-            image = Image.open(image_path)
-            width, height = image.size
+            elif type(x) == str:
+                layers += [nn.MaxPool2d(kernel_size=(2, 2), stride=(2, 2))]
 
-            class_id = annotation["class_id"]
-            xmin, ymin, xmax, ymax = annotation["bbox"]
+            elif type(x) == list:
+                conv1 = x[0]
+                conv2 = x[1]
+                num_repeats = x[2]
 
-            center_x = (xmin + xmax) / 2.0 / width
-            center_y = (ymin + ymax) / 2.0 / height
-            bbox_width = (xmax - xmin) / width
-            bbox_height = (ymax - ymin) / height
+                for _ in range(num_repeats):
+                    layers += [
+                        CNNBlock(
+                            in_channels,
+                            conv1[1],
+                            kernel_size=conv1[0],
+                            stride=conv1[2],
+                            padding=conv1[3],
+                        )
+                    ]
+                    layers += [
+                        CNNBlock(
+                            conv1[1],
+                            conv2[1],
+                            kernel_size=conv2[0],
+                            stride=conv2[2],
+                            padding=conv2[3],
+                        )
+                    ]
+                    in_channels = conv2[1]
+        return nn.Sequential(*layers)
 
-            yolo_annotations.append(
-                f"{class_id} {center_x} {center_y} {bbox_width} {bbox_height}"
-            )
-
-        return yolo_annotations
-
-    def save_yolo_annotations(self, yolo_annotations):
-        yaml_files = [
-            f
-            for f in os.listdir(self.yaml_dir)
-            if f.endswith(".yaml") or f.endswith(".yml")
-        ]
-        for yaml_file in yaml_files:
-            if "train" in yaml_file or "val" in yaml_file:
-                yaml_path = os.path.join(self.yaml_dir, yaml_file)
-                with open(yaml_path, "r") as f:
-                    data = yaml.safe_load(f)
-                for annotation in yolo_annotations:
-                    image_id = annotation["image_id"]
-                    yolo_annotation = annotation["annotation"]
-
-                    for entry in data:
-                        if entry["id_img"] == image_id:
-                            if "annotations" not in entry:
-                                entry["annotations"] = []
-                            entry["annotations"].append(yolo_annotation)
-
-                with open(yaml_path, "w") as f:
-                    yaml.safe_dump(data, f)
+    def _create_fcs(self, split_size, num_boxes, num_classes):
+        S, B, C = split_size, num_boxes, num_classes
+        return nn.Sequential(
+            nn.Flatten(),
+            nn.Linear(1024 * S * S, 496),
+            nn.Dropout(0.0),
+            nn.LeakyReLU(0.1),
+            nn.Linear(496, S * S * (C + B * 5)),
+        )
 
 
 if __name__ == "__main__":
-    # Example usage
-    annotations_dir = "path/to/your/annotations_dir"
-    images_dir = "path/to/your/images_dir"
-    yaml_dir = "path/to/your/yaml_dir"
-    class_mapping = {"class1": 0, "class2": 1}  # Example class mapping
-    yolo_annotations = [
-        {"image_id": 1, "annotation": "annotation1"},
-        {"image_id": 2, "annotation": "annotation2"},
-    ]
-
-    dataset = Dataset(annotations_dir, images_dir, yaml_dir, class_mapping)
-    dataset.save_yolo_annotations(yolo_annotations)
+    model = Yolov1(split_size=7, num_boxes=2, num_classes=20)
+    x = torch.randn((2, 3, 448, 448))
+    output = model(x)
+    print(output.shape)
