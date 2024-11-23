@@ -91,8 +91,8 @@ class VOCDataset(torch.utils.data.Dataset):
             grid_y = min(grid_y, self.split_size - 1)
 
             # YOLO format: [x_center, y_center, width, height, confidence, class_one_hot]
-            target[grid_y, grid_x, :5] = torch.tensor([x_center, y_center, width, height, 1.0])
-            target[grid_y, grid_x, 5 + class_id] = 1  # One-hot encoding the class label
+            target[grid_y, grid_x, 20:25] = torch.tensor([1.0 , x_center, y_center, width, height]) #***
+            target[grid_y, grid_x, class_id] = 1  # One-hot encoding the class label
 
         return target
 
