@@ -1,102 +1,111 @@
-import xml.etree.ElementTree as ET
-import os
-from PIL import Image
 import torch
-import torch.utils.data
+import os
+import xml.etree.ElementTree as ET
+from PIL import Image
+import torchvision.transforms as transforms
 
-class_mapping = {
-    'aeroplane': 0,
-    'bicycle': 1,
-    'bird': 2,
-    'boat': 3,
-    'bottle': 4,
-    'bus': 5,
-    'car': 6,
-    'cat': 7,
-    'chair': 8,
-    'cow': 9,
-    'diningtable': 10,
-    'dog': 11,
-    'horse': 12,
-    'motorbike': 13,
-    'person': 14,
-    'pottedplant': 15,
-    'sheep': 16,
-    'sofa': 17,
-    'train': 18,
-    'tvmonitor': 19
-}
 
-class Dataset(torch.utils.data.Dataset):
-    def __init__(self, annotations_dir, images_dir, train_txt_path, class_mapping):
+class VOCDataset(torch.utils.data.Dataset):
+    def __init__(self, annotations_dir, images_dir, split_txt, class_mapping, split_size=7, num_boxes=2, transform=None):
         self.annotations_dir = annotations_dir
         self.images_dir = images_dir
+        self.split_txt = split_txt
         self.class_mapping = class_mapping
-        self.train_txt_path = train_txt_path
+        self.split_size = split_size
+        self.num_boxes = num_boxes
+        self.transform = transform
 
-    def custom_annotations(self):
-        annotations = []
-        for xml_file in os.listdir(self.annotations_dir):
-            if xml_file.endswith('.xml'):
-                annotation_path = os.path.join(self.annotations_dir, xml_file)
-                tree = ET.parse(annotation_path)
-                root = tree.getroot()
+        # Load image ids from split file (train.txt or test.txt)
+        with open(split_txt, "r") as file:
+            self.image_ids = file.read().splitlines()
 
-                image_id = root.find('filename').text
-                for obj in root.findall('object'):
-                    class_name = obj.find('name').text
-                    class_id = self.class_mapping[class_name]
-                    bbox = obj.find('bndbox')
+    def __len__(self):
+        return len(self.image_ids)
 
-                    xmin = float(bbox.find('xmin').text)
-                    ymin = float(bbox.find('ymin').text)
-                    xmax = float(bbox.find('xmax').text)
-                    ymax = float(bbox.find('ymax').text)
+    def __getitem__(self, idx):
+        image_id = self.image_ids[idx]
+        image_path = os.path.join(self.images_dir, f"{image_id}.jpg")
+        annotation_path = os.path.join(self.annotations_dir, f"{image_id}.xml")
 
-                    annotations.append({'image_id': image_id, 'class_id': class_id, 'bbox': [xmin, ymin, xmax, ymax]})
-        return annotations
+        # Load image
+        image = Image.open(image_path).convert("RGB")
 
-    def convert_to_yolo_format(self, annotations):
-        yolo_annotations = []
-        for annotation in annotations:
-            image_path = os.path.join(self.images_dir, annotation['image_id'])
-            image = Image.open(image_path)
-            width, height = image.size
-            
-            class_id = annotation['class_id']
-            xmin, ymin, xmax, ymax = map(float, annotation['bbox'])
+        # Parse XML annotation
+        boxes, labels = self.parse_annotation(annotation_path)
 
-            center_x = (xmin + xmax) / 2.0 / width
-            center_y = (ymin + ymax) / 2.0 / height
-            bbox_width = (xmax - xmin) / width
-            bbox_height = (ymax - ymin) / height
-            
-            #add annotations to yolo_annotations list
-            yolo_annotations.append(f"{annotation['image_id']} {class_id} {center_x} {center_y} {bbox_width} {bbox_height}")
-        
-        return yolo_annotations
+        # Convert bounding boxes to YOLO format and normalize image
+        if self.transform:
+            image, target = self.apply_transform(image, boxes, labels)
 
-    def update_train_txt(self):
-        annotations = self.custom_annotations()  # Lấy annotations từ custom_annotations()
-        yolo_annotations = self.convert_to_yolo_format(annotations)
+        return image, target
 
-        #open and write train.txt file
-        with open(self.train_txt_path, 'w') as f:
-            for annotation in yolo_annotations:
-                f.write(f"{annotation}\n")
+    def parse_annotation(self, annotation_path):
+        tree = ET.parse(annotation_path)
+        root = tree.getroot()
+
+        boxes = []
+        labels = []
+
+        for obj in root.findall("object"):
+            class_name = obj.find("name").text
+            if class_name not in self.class_mapping:
+                continue
+
+            class_id = self.class_mapping[class_name]
+            bbox = obj.find("bndbox")
+            xmin = float(bbox.find("xmin").text)
+            ymin = float(bbox.find("ymin").text)
+            xmax = float(bbox.find("xmax").text)
+            ymax = float(bbox.find("ymax").text)
+
+            boxes.append([xmin, ymin, xmax, ymax])
+            labels.append(class_id)
+
+        return boxes, labels
+
+    def convert_to_yolo_tensor(self, boxes, labels):
+        target = torch.zeros((self.split_size, self.split_size, self.num_boxes * 5 + len(self.class_mapping)))
+
+        for box, label in zip(boxes, labels):
+            x_min, y_min, x_max, y_max = box
+            class_id = label
+
+            # Normalize bounding box coordinates
+            x_center = (x_min + x_max) / 2
+            y_center = (y_min + y_max) / 2
+            width = x_max - x_min
+            height = y_max - y_min
+
+            # Normalize to [0, 1] based on image size
+            x_center /= 448  # Image size 448x448
+            y_center /= 448
+            width /= 448
+            height /= 448
+
+            # Map the box to the grid cell
+            grid_x = int(x_center * self.split_size)
+            grid_y = int(y_center * self.split_size)
+
+            # Ensure grid_x and grid_y are within bounds
+            grid_x = min(grid_x, self.split_size - 1)
+            grid_y = min(grid_y, self.split_size - 1)
+
+            # YOLO format: [x_center, y_center, width, height, confidence, class_one_hot]
+            target[grid_y, grid_x, :5] = torch.tensor([x_center, y_center, width, height, 1.0])
+            target[grid_y, grid_x, 5 + class_id] = 1  # One-hot encoding the class label
+
+        return target
 
 
-if __name__ == '__main__':
-    #path to directory
-    annotations_dir = r'C:\Users\khiem\Downloads\NCKH\Task PASCAL VOC2012\VOCtrainval_11-May-2012 (1)\VOCdevkit\VOC2012\Annotations'
-    images_dir = r'C:\Users\khiem\Downloads\NCKH\Task PASCAL VOC2012\VOCtrainval_11-May-2012 (1)\VOCdevkit\VOC2012\JPEGImages'
-    train_txt_path = r'C:\Users\khiem\Downloads\NCKH\Task PASCAL VOC2012\VOCtrainval_11-May-2012 (1)\VOCdevkit\VOC2012\ImageSets\Main\train.txt'
+    def apply_transform(self, image, boxes, labels):
+        # Resize image to (448, 448) and normalize to [0, 1]
+        transform = transforms.Compose([
+            transforms.Resize((448, 448)),
+            transforms.ToTensor(),
+        ])
+        image = transform(image)
 
-    dataset = Dataset(
-        annotations_dir=annotations_dir,
-        images_dir=images_dir,
-        train_txt_path=train_txt_path,
-        class_mapping=class_mapping
-    )
-    
-    dataset.update_train_txt()  #update train.txt file
+        # Convert bounding boxes to YOLO format and normalize
+        target = self.convert_to_yolo_tensor(boxes, labels)
+
+        return image, target

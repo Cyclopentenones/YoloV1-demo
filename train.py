@@ -1,13 +1,6 @@
-"""
-Main file for training Yolo model on Pascal VOC dataset
-
-"""
-
 import torch
-import torchvision.transforms as transforms
 import torch.optim as optim
-import torchvision.transforms.functional as FT
-from tqdm import tqdm
+import torchvision.transforms as transforms
 from torch.utils.data import DataLoader
 from modelYOLOV1 import Yolov1
 from dataset import VOCDataset
@@ -22,37 +15,28 @@ from utils import (
     load_checkpoint,
 )
 from loss import YoloLoss
+from tqdm import tqdm
 
 seed = 123
 torch.manual_seed(seed)
 
-# Hyperparameters etc. 
+# Hyperparameters etc.
 LEARNING_RATE = 2e-5
-DEVICE = "cuda" if torch.cuda.is_available else "cpu"
-BATCH_SIZE = 16 # 64 in original paper but I don't have that much vram, grad accum?
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+BATCH_SIZE = 16  # Adjust based on your GPU memory
 WEIGHT_DECAY = 0
 EPOCHS = 1000
 NUM_WORKERS = 2
 PIN_MEMORY = True
-LOAD_MODEL = False
-LOAD_MODEL_FILE = "overfit.pth.tar"
-IMG_DIR = "data/images"
-LABEL_DIR = "data/labels"
+LOAD_MODEL = False  # Set to False since it's your first time training
+LOAD_MODEL_FILE = None  # No model to load initially
+IMG_DIR = r"C:\Users\khiem\Downloads\NCKH\Task PASCAL VOC2012\VOCtrainval_11-May-2012 (1)\VOCdevkit\VOC2012\JPEGImages"
+LABEL_DIR = r"C:\Users\khiem\Downloads\NCKH\Task PASCAL VOC2012\VOCtrainval_11-May-2012 (1)\VOCdevkit\VOC2012\Annotations"
+TRAIN_CSV = r"C:\Users\khiem\Downloads\NCKH\Task PASCAL VOC2012\VOCtrainval_11-May-2012 (1)\VOCdevkit\VOC2012\ImageSets\Main\train.txt"  # Adjust the path as needed
+TEST_CSV = r"C:\Users\khiem\Downloads\NCKH\Task PASCAL VOC2012\VOCtrainval_11-May-2012 (1)\VOCdevkit\VOC2012\ImageSets\Main\val.txt"  # Adjust the path as needed
 
-
-class Compose(object):
-    def __init__(self, transforms):
-        self.transforms = transforms
-
-    def __call__(self, img, bboxes):
-        for t in self.transforms:
-            img, bboxes = t(img), bboxes
-
-        return img, bboxes
-
-
-transform = Compose([transforms.Resize((448, 448)), transforms.ToTensor(),])
-
+# Transformations for input data
+transform = transforms.Compose([transforms.Resize((448, 448)), transforms.ToTensor()])
 
 def train_fn(train_loader, model, optimizer, loss_fn):
     loop = tqdm(train_loader, leave=True)
@@ -67,31 +51,60 @@ def train_fn(train_loader, model, optimizer, loss_fn):
         loss.backward()
         optimizer.step()
 
-        # update progress bar
+        # Update progress bar
         loop.set_postfix(loss=loss.item())
 
     print(f"Mean loss was {sum(mean_loss)/len(mean_loss)}")
 
-
 def main():
+    class_mapping = {
+    "aeroplane": 0,
+    "bicycle": 1,
+    "bird": 2,
+    "boat": 3,
+    "bottle": 4,
+    "bus": 5,
+    "car": 6,
+    "cat": 7,
+    "chair": 8,
+    "cow": 9,
+    "diningtable": 10,
+    "dog": 11,
+    "horse": 12,
+    "motorbike": 13,
+    "person": 14,
+    "pottedplant": 15,
+    "sheep": 16,
+    "sofa": 17,
+    "train": 18,
+    "tvmonitor": 19
+}
+    # Initialize the model
     model = Yolov1(split_size=7, num_boxes=2, num_classes=20).to(DEVICE)
     optimizer = optim.Adam(
         model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY
     )
     loss_fn = YoloLoss()
 
-    if LOAD_MODEL:
+    # Load model if previously trained (but it's your first time)
+    if LOAD_MODEL and LOAD_MODEL_FILE:
         load_checkpoint(torch.load(LOAD_MODEL_FILE), model, optimizer)
 
+    # Load datasets
     train_dataset = VOCDataset(
-        "data/100examples.csv",
+        split_txt =TRAIN_CSV,
         transform=transform,
-        img_dir=IMG_DIR,
-        label_dir=LABEL_DIR,
+        images_dir=IMG_DIR,
+        annotations_dir=LABEL_DIR,
+        class_mapping=class_mapping
     )
 
     test_dataset = VOCDataset(
-        "data/test.csv", transform=transform, img_dir=IMG_DIR, label_dir=LABEL_DIR,
+        split_txt =TEST_CSV,
+        transform=transform,
+        images_dir=IMG_DIR,
+        annotations_dir=LABEL_DIR,
+        class_mapping=class_mapping
     )
 
     train_loader = DataLoader(
@@ -113,16 +126,7 @@ def main():
     )
 
     for epoch in range(EPOCHS):
-        # for x, y in train_loader:
-        #    x = x.to(DEVICE)
-        #    for idx in range(8):
-        #        bboxes = cellboxes_to_boxes(model(x))
-        #        bboxes = non_max_suppression(bboxes[idx], iou_threshold=0.5, threshold=0.4, box_format="midpoint")
-        #        plot_image(x[idx].permute(1,2,0).to("cpu"), bboxes)
-
-        #    import sys
-        #    sys.exit()
-
+        # Track performance on train set
         pred_boxes, target_boxes = get_bboxes(
             train_loader, model, iou_threshold=0.5, threshold=0.4
         )
@@ -132,17 +136,16 @@ def main():
         )
         print(f"Train mAP: {mean_avg_prec}")
 
-        #if mean_avg_prec > 0.9:
-        #    checkpoint = {
-        #        "state_dict": model.state_dict(),
-        #        "optimizer": optimizer.state_dict(),
-        #    }
-        #    save_checkpoint(checkpoint, filename=LOAD_MODEL_FILE)
-        #    import time
-        #    time.sleep(10)
-
+        # Training loop
         train_fn(train_loader, model, optimizer, loss_fn)
 
+        # Save model after every epoch
+        checkpoint = {
+            "state_dict": model.state_dict(),
+            "optimizer": optimizer.state_dict(),
+        }
+        save_checkpoint(checkpoint, filename=f"model_epoch_{epoch+1}.pth")
+        
 
 if __name__ == "__main__":
     main()

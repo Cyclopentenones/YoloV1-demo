@@ -1,7 +1,7 @@
 import torch
 import torch.optim as optim
 from torch.utils.data import DataLoader
-from model import Yolov1
+from modelYOLOV1 import Yolov1
 from dataset import Dataset
 from criterion import Loss
 from config import train, val, class_mapping, epochs, batch_size, learning_rate
