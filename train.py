@@ -25,11 +25,12 @@ LEARNING_RATE = 2e-5
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 BATCH_SIZE = 16  # Adjust based on your GPU memory
 WEIGHT_DECAY = 0
-EPOCHS = 1000
+EPOCHS = 2
 NUM_WORKERS = 2
 PIN_MEMORY = True
 LOAD_MODEL = False  # Set to False since it's your first time training
-LOAD_MODEL_FILE = None  # No model to load initially
+LOAD_MODEL_FILE = "overfit.pth.tar"
+  # No model to load initially
 IMG_DIR = r"C:\Users\khiem\Downloads\NCKH\Task PASCAL VOC2012\VOCtrainval_11-May-2012 (1)\VOCdevkit\VOC2012\JPEGImages"
 LABEL_DIR = r"C:\Users\khiem\Downloads\NCKH\Task PASCAL VOC2012\VOCtrainval_11-May-2012 (1)\VOCdevkit\VOC2012\Annotations"
 TRAIN_CSV = r"C:\Users\khiem\Downloads\NCKH\Task PASCAL VOC2012\VOCtrainval_11-May-2012 (1)\VOCdevkit\VOC2012\ImageSets\Main\train.txt"  # Adjust the path as needed
@@ -144,7 +145,7 @@ def main():
             "state_dict": model.state_dict(),
             "optimizer": optimizer.state_dict(),
         }
-        save_checkpoint(checkpoint, filename=f"model_epoch_{epoch+1}.pth")
+        save_checkpoint(checkpoint, filename=LOAD_MODEL_FILE)
         
 
 if __name__ == "__main__":
