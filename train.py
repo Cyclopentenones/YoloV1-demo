@@ -23,12 +23,12 @@ torch.manual_seed(seed)
 # Hyperparameters etc.
 LEARNING_RATE = 2e-5
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-BATCH_SIZE = 16  # Adjust based on your GPU memory
+BATCH_SIZE = 64  # Adjust based on your GPU memory
 WEIGHT_DECAY = 0
 EPOCHS = 10
 NUM_WORKERS = 2
 PIN_MEMORY = True
-LOAD_MODEL = False  # Set to False since it's your first time training
+LOAD_MODEL = True #***  # Set to False since it's your first time training
 LOAD_MODEL_FILE = "overfit.pth.tar"
   # No model to load initially
 IMG_DIR = r"C:\Users\khiem\Downloads\NCKH\Task PASCAL VOC2012\VOCtrainval_11-May-2012 (1)\VOCdevkit\VOC2012\JPEGImages"
