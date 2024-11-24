@@ -23,12 +23,12 @@ torch.manual_seed(seed)
 # Hyperparameters etc.
 LEARNING_RATE = 2e-5
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-BATCH_SIZE = 64  # Adjust based on your GPU memory
+BATCH_SIZE = 16  # Adjust based on your GPU memory
 WEIGHT_DECAY = 0
-EPOCHS = 10
+EPOCHS = 2
 NUM_WORKERS = 2
 PIN_MEMORY = True
-LOAD_MODEL = True #***  # Set to False since it's your first time training
+LOAD_MODEL = False #***  # Set to False since it's your first time training
 LOAD_MODEL_FILE = "overfit.pth.tar"
   # No model to load initially
 IMG_DIR = r"C:\Users\khiem\Downloads\NCKH\Task PASCAL VOC2012\VOCtrainval_11-May-2012 (1)\VOCdevkit\VOC2012\JPEGImages"
@@ -59,27 +59,28 @@ def train_fn(train_loader, model, optimizer, loss_fn):
 
 def main():
     class_mapping = {
-    "aeroplane": 0,
-    "bicycle": 1,
-    "bird": 2,
-    "boat": 3,
-    "bottle": 4,
-    "bus": 5,
-    "car": 6,
-    "cat": 7,
-    "chair": 8,
-    "cow": 9,
-    "diningtable": 10,
-    "dog": 11,
-    "horse": 12,
-    "motorbike": 13,
-    "person": 14,
-    "pottedplant": 15,
-    "sheep": 16,
-    "sofa": 17,
-    "train": 18,
-    "tvmonitor": 19
-}
+        "aeroplane": 0,
+        "bicycle": 1,
+        "bird": 2,
+        "boat": 3,
+        "bottle": 4,
+        "bus": 5,
+        "car": 6,
+        "cat": 7,
+        "chair": 8,
+        "cow": 9,
+        "diningtable": 10,
+        "dog": 11,
+        "horse": 12,
+        "motorbike": 13,
+        "person": 14,
+        "pottedplant": 15,
+        "sheep": 16,
+        "sofa": 17,
+        "train": 18,
+        "tvmonitor": 19
+    }
+
     # Initialize the model
     model = Yolov1(split_size=7, num_boxes=2, num_classes=20).to(DEVICE)
     optimizer = optim.Adam(
@@ -91,9 +92,9 @@ def main():
     if LOAD_MODEL and LOAD_MODEL_FILE:
         load_checkpoint(torch.load(LOAD_MODEL_FILE), model, optimizer)
 
-    # Load datasets
+    # Load datasets once
     train_dataset = VOCDataset(
-        split_txt =TRAIN_CSV,
+        split_txt=TRAIN_CSV,
         transform=transform,
         images_dir=IMG_DIR,
         annotations_dir=LABEL_DIR,
@@ -101,13 +102,14 @@ def main():
     )
 
     test_dataset = VOCDataset(
-        split_txt =TEST_CSV,
+        split_txt=TEST_CSV,
         transform=transform,
         images_dir=IMG_DIR,
         annotations_dir=LABEL_DIR,
         class_mapping=class_mapping
     )
 
+    # Create DataLoader (but we will not load the data in each epoch)
     train_loader = DataLoader(
         dataset=train_dataset,
         batch_size=BATCH_SIZE,
@@ -126,10 +128,14 @@ def main():
         drop_last=True,
     )
 
+    # Pre-load all data into memory for training
+    train_data = list(train_loader)  # Load data into memory once
+    test_data = list(test_loader)  # Load data into memory once
+
     for epoch in range(EPOCHS):
         # Track performance on train set
         pred_boxes, target_boxes = get_bboxes(
-            train_loader, model, iou_threshold=0.5, threshold=0.4
+            train_data, model, iou_threshold=0.5, threshold=0.4
         )
 
         mean_avg_prec = mean_average_precision(
@@ -137,8 +143,8 @@ def main():
         )
         print(f"Train mAP: {mean_avg_prec}")
 
-        # Training loop
-        train_fn(train_loader, model, optimizer, loss_fn)
+        # Training loop, use pre-loaded data
+        train_fn(train_data, model, optimizer, loss_fn)
 
         # Save model after every epoch
         checkpoint = {
@@ -146,6 +152,7 @@ def main():
             "optimizer": optimizer.state_dict(),
         }
         save_checkpoint(checkpoint, filename=LOAD_MODEL_FILE)
+
         
 
 if __name__ == "__main__":
