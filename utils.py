@@ -94,9 +94,39 @@ def convert_cellboxes(predictions,S=7):
     scores = torch.cat((predictions[...,4:5].unsqueeze(0),predictions[...,9:10].unsqueeze(0)),dim=0) #size [2,batch_size,7,7]
     best_box = scores.argmax(0).unsqueeze(-1) #chosen box with highest confidence
     best_boxes = bboxes_1 * (1 - best_box) + best_box * bboxes_2
+    cell_indices = torch.arrange(7).repeat(batch_size,7,1).unsqueeze(-1) #create indices for each cell
+    x=1/S *(best_boxes[...,0:1]+cell_indices) #convert x to x coordinate
+    y=1/S *(best_boxes[...,1:2]+cell_indices) #convert y to y coordinate **note
+    w_h = 1/S * best_boxes[...,2:4] #convert w,h to w,h coordinate
+    converted_bboxes = torch.cat((x,y,w_h),dim=-1)
+    predicted_class = predictions[...,10:30].argmax(-1).unsqueeze(-1) # size [batch_size,7,7,1] with per cell class prediction
+    best_confidence = torch.max(predictions[...,4],predictions[...,9]).unsqueeze(-1) 
+    converted_preds = torch.cat((converted_bboxes,best_confidence,predicted_class),dim=-1) #format [batch_size,7,7,6] with last dimension is x,y,w,h,confidence,class
+    
+    return converted_preds
     
 
 
 def cellboxes_to_boxes(out,S=7):
+    converted_pred = convert_cellboxes(out).reshape(out.shape[0],S*S,6)
+    converted_pred[...,5] = converted_pred[...,5].long()
+    all_bboxes = []
     
+    for ex_idx in range(out.shape[0]):
+        bboxes = [] #store all bboxes for each example
+        for bbox_idx in range(S*S):
+            bboxes.append([x.item() for x in converted_pred[ex_idx,bbox_idx,:]]) #**note bboxe's size is [49,6]
+        all_bboxes.append(bboxes) # size is [batch_size,49,6]
+    
+    return all_bboxes    
+    
+    
+def save_checkpoint(state, filename="my_checkpoint.pth.tar"):
+    print("=> Saving checkpoint")
+    torch.save(state, filename)
+    
+def load_checkpoint(checkpoint, model, optimizer):
+    print("=> Loading checkpoint")
+    model.load_state_dict(checkpoint["state_dict"])
+    optimizer.load_state_dict(checkpoint["optimizer"])
         
