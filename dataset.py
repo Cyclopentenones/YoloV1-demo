@@ -31,7 +31,7 @@ classes = [
 
 class YOLODataset(Dataset):
     def __init__(
-        self, img_files, label_files, img_dir, label_dir, S, B, C, transform=None
+        self, img_files, label_files, img_dir, label_dir, S, B, C, transform=True
     ):
         self.img_files = img_files
         self.label_files = label_files
@@ -62,11 +62,11 @@ class YOLODataset(Dataset):
         boxes = []
         with open(label_path, "r") as f:
             for label in f.readlines():
-                class_label, x, y, width, height = [
+                class_label, x, y, width, height, confidence = [
                     float(val) if "." in val else int(val)
                     for val in label.strip().split()
                 ]
-                boxes.append([class_label, x, y, width, height])
+                boxes.append([class_label, x, y, width, height, confidence])
         boxes = torch.tensor(boxes)
 
         # Áp dụng transform nếu có
@@ -92,7 +92,7 @@ class YOLODataset(Dataset):
     def create_label_matrix(self, boxes):
         label_matrix = torch.zeros((self.S, self.S, self.C + 5 * self.B))
         for box in boxes:
-            class_label, x, y, width, height = box.tolist()
+            class_label, x, y, width, height, _ = box.tolist()
             class_label = int(class_label)
 
             i, j = int(self.S * y), int(self.S * x)
@@ -117,7 +117,7 @@ class YOLODataset(Dataset):
 
         with open(label_path, "r") as f:
             for line in f:
-                cls_id, x_center, y_center, bbox_width, bbox_height = map(
+                cls_id, x_center, y_center, bbox_width, bbox_height, confidence = map(
                     float, line.strip().split()
                 )
                 cls_id = int(cls_id)
@@ -131,7 +131,7 @@ class YOLODataset(Dataset):
                 cv2.rectangle(image, (xmin, ymin), (xmax, ymax), (0, 255, 0), 2)
 
                 # Thêm nhãn class
-                label = classes[cls_id]
+                label = f"{classes[cls_id]}: {confidence:.2f}"
                 cv2.putText(
                     image,
                     label,
@@ -165,6 +165,8 @@ def test():
     dataset.draw_boxes(
         os.path.join(img_dir, img_files[0]), os.path.join(label_dir, label_files[0])
     )
+    img1, target = dataset[0]
+    print(img1.shape, target.shape)
 
 
 if __name__ == "__main__":
