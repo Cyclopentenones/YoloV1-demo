@@ -1,111 +1,148 @@
-import torch
 import os
-import xml.etree.ElementTree as ET
-from PIL import Image
+import torch
+import cv2
 import torchvision.transforms as transforms
+from torch.utils.data import Dataset
+
+# Danh sách các lớp VOC2012
+classes = [
+    "aeroplane",
+    "bicycle",
+    "bird",
+    "boat",
+    "bottle",
+    "bus",
+    "car",
+    "cat",
+    "chair",
+    "cow",
+    "diningtable",
+    "dog",
+    "horse",
+    "motorbike",
+    "person",
+    "pottedplant",
+    "sheep",
+    "sofa",
+    "train",
+    "tvmonitor",
+]
 
 
-class VOCDataset(torch.utils.data.Dataset):
-    def __init__(self, annotations_dir, images_dir, split_txt, class_mapping, split_size=7, num_boxes=2, transform=None):
-        self.annotations_dir = annotations_dir
-        self.images_dir = images_dir
-        self.split_txt = split_txt
-        self.class_mapping = class_mapping
-        self.split_size = split_size
-        self.num_boxes = num_boxes
+class YOLODataset(Dataset):
+    def __init__(
+        self, img_files, label_files, img_dir, label_dir, S, B, C, transform=True
+    ):
+        self.img_files = img_files
+        self.label_files = label_files
+        self.img_dir = img_dir
+        self.label_dir = label_dir
+        self.S = S
+        self.B = B
+        self.C = C
         self.transform = transform
 
-        # Load image ids from split file (train.txt or test.txt)
-        with open(split_txt, "r") as file:
-            self.image_ids = file.read().splitlines()
-
     def __len__(self):
-        return len(self.image_ids)
+        return len(self.img_files)
 
-    def __getitem__(self, idx):
-        image_id = self.image_ids[idx]
-        image_path = os.path.join(self.images_dir, f"{image_id}.jpg")
-        annotation_path = os.path.join(self.annotations_dir, f"{image_id}.xml")
+    def __getitem__(self, index):
+        # Đọc đường dẫn hình ảnh và nhãn
+        img_path = os.path.join(self.img_dir, self.img_files[index])
+        label_path = os.path.join(self.label_dir, self.label_files[index])
 
-        # Load image
-        image = Image.open(image_path).convert("RGB")
+        # Kiểm tra tệp tồn tại
+        assert os.path.exists(img_path), f"Image file not found: {img_path}"
+        assert os.path.exists(label_path), f"Label file not found: {label_path}"
 
-        # Parse XML annotation
-        boxes, labels = self.parse_annotation(annotation_path)
+        # Đọc và chuyển đổi hình ảnh
+        image = cv2.imread(img_path)
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
 
-        # Convert bounding boxes to YOLO format and normalize image
-        if self.transform:
-            image, target = self.apply_transform(image, boxes, labels)
-
-        return image, target
-
-    def parse_annotation(self, annotation_path):
-        tree = ET.parse(annotation_path)
-        root = tree.getroot()
-
+        # Đọc tệp nhãn
         boxes = []
-        labels = []
+        with open(label_path, "r") as f:
+            for label in f.readlines():
+                class_label, x, y, width, height, confidence = [
+                    float(val) if "." in val else int(val)
+                    for val in label.strip().split()
+                ]
+                boxes.append([class_label, x, y, width, height, confidence])
+        boxes = torch.tensor(boxes)
 
-        for obj in root.findall("object"):
-            class_name = obj.find("name").text
-            if class_name not in self.class_mapping:
-                continue
+        # Áp dụng transform nếu có
+        if self.transform:
+            image, boxes = self.apply_transforms(image, boxes)
 
-            class_id = self.class_mapping[class_name]
-            bbox = obj.find("bndbox")
-            xmin = float(bbox.find("xmin").text)
-            ymin = float(bbox.find("ymin").text)
-            xmax = float(bbox.find("xmax").text)
-            ymax = float(bbox.find("ymax").text)
+        # Tạo ma trận nhãn
+        label_matrix = self.create_label_matrix(boxes)
 
-            boxes.append([xmin, ymin, xmax, ymax])
-            labels.append(class_id)
+        return image, label_matrix
 
-        return boxes, labels
-
-    def convert_to_yolo_tensor(self, boxes, labels):
-        target = torch.zeros((self.split_size, self.split_size, self.num_boxes * 5 + len(self.class_mapping)))
-
-        for box, label in zip(boxes, labels):
-            x_min, y_min, x_max, y_max = box
-            class_id = label
-
-            # Normalize bounding box coordinates
-            x_center = (x_min + x_max) / 2
-            y_center = (y_min + y_max) / 2
-            width = x_max - x_min
-            height = y_max - y_min
-
-            # Normalize to [0, 1] based on image size
-            x_center /= 448  # Image size 448x448
-            y_center /= 448
-            width /= 448
-            height /= 448
-
-            # Map the box to the grid cell
-            grid_x = int(x_center * self.split_size)
-            grid_y = int(y_center * self.split_size)
-
-            # Ensure grid_x and grid_y are within bounds
-            grid_x = min(grid_x, self.split_size - 1)
-            grid_y = min(grid_y, self.split_size - 1)
-
-            # YOLO format: [x_center, y_center, width, height, confidence, class_one_hot]
-            target[grid_y, grid_x, 20:25] = torch.tensor([1.0 , x_center, y_center, width, height]) #***
-            target[grid_y, grid_x, class_id] = 1  # One-hot encoding the class label
-
-        return target
-
-
-    def apply_transform(self, image, boxes, labels):
-        # Resize image to (448, 448) and normalize to [0, 1]
-        transform = transforms.Compose([
-            transforms.Resize((448, 448)),
-            transforms.ToTensor(),
-        ])
+    def apply_transforms(self, image, boxes):
+        transform = transforms.Compose(
+            [
+                transforms.ToPILImage(),
+                transforms.Resize((448, 448)),
+                transforms.ToTensor(),
+            ]
+        )
         image = transform(image)
+        return image, boxes
 
-        # Convert bounding boxes to YOLO format and normalize
-        target = self.convert_to_yolo_tensor(boxes, labels)
+    def create_label_matrix(self, boxes):
+        label_matrix = torch.zeros((self.S, self.S, self.C + 5 * self.B))
+        for box in boxes:
+            class_label, x, y, width, height, _ = box.tolist()
+            class_label = int(class_label)
 
-        return image, target
+            i, j = int(self.S * y), int(self.S * x)
+            x_cell, y_cell = self.S * x - j, self.S * y - i
+            width_cell, height_cell = width * self.S, height * self.S
+
+            if label_matrix[i, j, 4] == 0:  # Thay đổi từ 20 thành 4
+                label_matrix[i, j, 4] = 1  # Thay đổi từ 20 thành 4
+                label_matrix[i, j, 0:4] = torch.tensor(
+                    [x_cell, y_cell, width_cell, height_cell]
+                )
+                label_matrix[i, j, 5 + class_label] = 1  # Thay đổi từ class_label thành 5 + class_label
+
+        return label_matrix
+
+    def draw_boxes(self, image_path, label_path):
+        # Đọc hình ảnh
+        image = cv2.imread(image_path)
+
+        # Kiểm tra tệp tồn tại
+        assert os.path.exists(label_path), f"Label file not found: {label_path}"
+
+        with open(label_path, "r") as f:
+            for line in f:
+                cls_id, x_center, y_center, bbox_width, bbox_height, confidence = map(
+                    float, line.strip().split()
+                )
+                cls_id = int(cls_id)
+                h, w, _ = image.shape
+                xmin = int((x_center - bbox_width / 2) * w)
+                ymin = int((y_center - bbox_height / 2) * h)
+                xmax = int((x_center + bbox_width / 2) * w)
+                ymax = int((y_center + bbox_height / 2) * h)
+
+                # Vẽ bounding box
+                cv2.rectangle(image, (xmin, ymin), (xmax, ymax), (0, 255, 0), 2)
+
+                # Thêm nhãn class
+                label = f"{classes[cls_id]}: {confidence:.2f}"
+                cv2.putText(
+                    image,
+                    label,
+                    (xmin, ymin - 10),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.5,
+                    (0, 255, 0),
+                    2,
+                )
+
+        cv2.imshow("Image with Bounding Boxes", image)
+        cv2.waitKey(0)
+        cv2.destroyAllWindows()
+

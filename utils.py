@@ -8,8 +8,8 @@ def iou( boxes_preds,boxes_lables):
     #convert x,y,w,h to x1,y1,x2,y2
     box1_x1 = boxes_preds[...,0:1] - boxes_preds[...,2:3]/2
     box1_y1 = boxes_preds[...,1:2]- boxes_preds[...,3:4]/2
-    box1_x2 = boxes_preds[...,0:1] - boxes_preds[...,2:3]/2
-    box1_y2 = boxes_preds[...,1:2] - boxes_preds[...,3:4]/2
+    box1_x2 = boxes_preds[...,0:1] + boxes_preds[...,2:3]/2
+    box1_y2 = boxes_preds[...,1:2] + boxes_preds[...,3:4]/2
     box2_x1 = boxes_lables[...,0:1] - boxes_lables[...,2:3]/2
     box2_y1 = boxes_lables[...,1:2] - boxes_lables[...,3:4]/2
     box2_x2 = boxes_lables[...,0:1] + boxes_lables[...,2:3]/2
@@ -85,26 +85,46 @@ def get_bboxes(loader,model,iou_threshold,confidence,device="cuda"):
     model.train() #set model back to training mode
     return all_pred_boxes,all_true_boxes
 
-def convert_cellboxes(predictions,S=7):
-    predictions =predictions.to("cuda")
+def convert_cellboxes(predictions, S=7):
+    predictions = predictions.to("cuda")
     batch_size = predictions.shape[0]
-    predictions = predictions.reshape(batch_size,7,7,30)
-    bboxes_1 = predictions[...,0:4] # x,y,w,h
-    bboxes_2 = predictions[...,5:9] # x,y,w,h
-    scores = torch.cat((predictions[...,4:5].unsqueeze(0),predictions[...,9:10].unsqueeze(0)),dim=0) #size [2,batch_size,7,7]
-    best_box = scores.argmax(0).unsqueeze(-1) #chosen box with highest confidence
-    best_boxes = bboxes_1 * (1 - best_box) + best_box * bboxes_2
-    cell_indices = torch.arrange(7).repeat(batch_size,7,1).unsqueeze(-1) #create indices for each cell
-    x=1/S *(best_boxes[...,0:1]+cell_indices) #convert x to x coordinate
-    y=1/S *(best_boxes[...,1:2]+cell_indices) #convert y to y coordinate **note
-    w_h = 1/S * best_boxes[...,2:4] #convert w,h to w,h coordinate
-    converted_bboxes = torch.cat((x,y,w_h),dim=-1)
-    predicted_class = predictions[...,10:30].argmax(-1).unsqueeze(-1) # size [batch_size,7,7,1] with per cell class prediction
-    best_confidence = torch.max(predictions[...,4],predictions[...,9]).unsqueeze(-1) 
-    converted_preds = torch.cat((converted_bboxes,best_confidence,predicted_class),dim=-1) #format [batch_size,7,7,6] with last dimension is x,y,w,h,confidence,class
+    predictions = predictions.reshape(batch_size, S, S, 30)
+    
+    # Bbox predictions
+    bboxes_1 = predictions[..., 0:4]  # x, y, w, h
+    bboxes_2 = predictions[..., 5:9]  # x, y, w, h
+    
+    # Confidence scores for both boxes
+    scores = torch.cat(
+        (predictions[..., 4:5], predictions[..., 9:10]),
+        dim=-1
+    )  # Shape: [batch_size, S, S, 2]
+    
+    # Select the best box based on confidence
+    best_box = scores.argmax(-1).unsqueeze(-1)  # Shape: [batch_size, S, S, 1]
+    best_boxes = bboxes_1 * (1 - best_box) + best_box * bboxes_2  # Choose best box
+    
+    # Generate cell indices for x and y adjustment
+    cell_indices = torch.arange(S, device=predictions.device).repeat(batch_size, S, 1).unsqueeze(-1)
+    
+    # Convert to (x, y, w, h) in YOLO format
+    x = (1 / S) * (best_boxes[..., 0:1] + cell_indices)  # Adjust x
+    y = (1 / S) * (best_boxes[..., 1:2] + cell_indices.permute(0, 2, 1, 3))  # Adjust y
+    w_h = (1 / S) * best_boxes[..., 2:4]  # Adjust width and height
+    
+    # Concatenate to form bounding box predictions
+    converted_bboxes = torch.cat((x, y, w_h), dim=-1)
+    
+    # Get class predictions
+    predicted_class = predictions[..., 10:30].argmax(-1).unsqueeze(-1)  # Shape: [batch_size, S, S, 1]
+    
+    # Get the best confidence score
+    best_confidence = torch.max(predictions[..., 4], predictions[..., 9]).unsqueeze(-1)  # Shape: [batch_size, S, S, 1]
+    
+    # Concatenate to final format: [batch_size, S, S, 6]
+    converted_preds = torch.cat((converted_bboxes, best_confidence, predicted_class), dim=-1)
     
     return converted_preds
-    
 
 
 def cellboxes_to_boxes(out,S=7):

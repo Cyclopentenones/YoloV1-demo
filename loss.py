@@ -12,6 +12,7 @@ class YoloLoss(nn.Module):
         self.lambda_coord = 5
 
     def forward(self, predictions, target):
+        predictions = predictions.reshape(-1, self.S, self.S, self.B * 5 + self.C)
         # Calculate IoUs
         iou_b1 = iou(predictions[..., 0:4], target[..., 0:4])
         iou_b2 = iou(predictions[..., 5:9], target[..., 0:4])

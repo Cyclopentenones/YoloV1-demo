@@ -3,11 +3,12 @@ import torch.optim as optim
 import torchvision.transforms as transforms
 from torch.utils.data import DataLoader
 from modelYOLOV1 import Yolov1
-from dataset import VOCDataset
+from dataset import YOLODataset, classes
+import time
 from utils import (
     non_max_suppression,
     mean_average_precision,
-    intersection_over_union,
+    iou,
     cellboxes_to_boxes,
     get_bboxes,
     plot_image,
@@ -16,6 +17,7 @@ from utils import (
 )
 from loss import YoloLoss
 from tqdm import tqdm
+import os
 
 seed = 123
 torch.manual_seed(seed)
@@ -23,24 +25,20 @@ torch.manual_seed(seed)
 # Hyperparameters etc.
 LEARNING_RATE = 2e-5
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-BATCH_SIZE = 16  # Adjust based on your GPU memory
+BATCH_SIZE = 8  # Adjust based on your GPU memory
 WEIGHT_DECAY = 0
-EPOCHS = 2
-NUM_WORKERS = 2
+EPOCHS = 10
+NUM_WORKERS = 4  # Increase the number of workers for faster data loading
 PIN_MEMORY = True
-LOAD_MODEL = False #***  # Set to False since it's your first time training
-LOAD_MODEL_FILE = "overfit.pth.tar"
-  # No model to load initially
-IMG_DIR = r"C:\Users\khiem\Downloads\NCKH\Task PASCAL VOC2012\VOCtrainval_11-May-2012 (1)\VOCdevkit\VOC2012\JPEGImages"
-LABEL_DIR = r"C:\Users\khiem\Downloads\NCKH\Task PASCAL VOC2012\VOCtrainval_11-May-2012 (1)\VOCdevkit\VOC2012\Annotations"
-TRAIN_CSV = r"C:\Users\khiem\Downloads\NCKH\Task PASCAL VOC2012\VOCtrainval_11-May-2012 (1)\VOCdevkit\VOC2012\ImageSets\Main\train.txt"  # Adjust the path as needed
-TEST_CSV = r"C:\Users\khiem\Downloads\NCKH\Task PASCAL VOC2012\VOCtrainval_11-May-2012 (1)\VOCdevkit\VOC2012\ImageSets\Main\val.txt"  # Adjust the path as needed
-
+LOAD_MODEL = False  # Set to False since it's your first time training
+LOAD_MODEL_FILE = "overfit.pt"
+IMG_DIR = r"C:\Users\ASUS\Downloads\YoloV1-demo-Kien\YoloV1-demo-Kien\data\train"
+LABEL_DIR = r"C:\Users\ASUS\Downloads\YoloV1-demo-Kien\YoloV1-demo-Kien\data\train_labels"
 # Transformations for input data
 transform = transforms.Compose([transforms.Resize((448, 448)), transforms.ToTensor()])
 
 def train_fn(train_loader, model, optimizer, loss_fn):
-    loop = tqdm(train_loader, leave=True)
+    loop = tqdm(train_loader, leave=True, desc='Training')
     mean_loss = []
 
     for batch_idx, (x, y) in enumerate(loop):
@@ -58,28 +56,7 @@ def train_fn(train_loader, model, optimizer, loss_fn):
     print(f"Mean loss was {sum(mean_loss)/len(mean_loss)}")
 
 def main():
-    class_mapping = {
-        "aeroplane": 0,
-        "bicycle": 1,
-        "bird": 2,
-        "boat": 3,
-        "bottle": 4,
-        "bus": 5,
-        "car": 6,
-        "cat": 7,
-        "chair": 8,
-        "cow": 9,
-        "diningtable": 10,
-        "dog": 11,
-        "horse": 12,
-        "motorbike": 13,
-        "person": 14,
-        "pottedplant": 15,
-        "sheep": 16,
-        "sofa": 17,
-        "train": 18,
-        "tvmonitor": 19
-    }
+    class_mapping = {cls: idx for idx, cls in enumerate(classes)}
 
     # Initialize the model
     model = Yolov1(split_size=7, num_boxes=2, num_classes=20).to(DEVICE)
@@ -89,27 +66,25 @@ def main():
     loss_fn = YoloLoss()
 
     # Load model if previously trained (but it's your first time)
-    if LOAD_MODEL and LOAD_MODEL_FILE:
-        load_checkpoint(torch.load(LOAD_MODEL_FILE), model, optimizer)
+    if LOAD_MODEL:
+        if os.path.isfile(LOAD_MODEL_FILE):
+            print(f"Loading checkpoint from {LOAD_MODEL_FILE}...")
+            load_checkpoint(torch.load(LOAD_MODEL_FILE), model, optimizer)
+        else:
+            print(f"Checkpoint file {LOAD_MODEL_FILE} not found. Starting fresh.")
 
-    # Load datasets once
-    train_dataset = VOCDataset(
-        split_txt=TRAIN_CSV,
+    # Load datasets
+    train_dataset = YOLODataset(
+        img_files=[f for f in os.listdir(IMG_DIR)],
+        label_files=[f for f in os.listdir(LABEL_DIR)],
+        img_dir=IMG_DIR,
+        label_dir=LABEL_DIR,
+        S=7,
+        B=2,
+        C=20,
         transform=transform,
-        images_dir=IMG_DIR,
-        annotations_dir=LABEL_DIR,
-        class_mapping=class_mapping
     )
 
-    test_dataset = VOCDataset(
-        split_txt=TEST_CSV,
-        transform=transform,
-        images_dir=IMG_DIR,
-        annotations_dir=LABEL_DIR,
-        class_mapping=class_mapping
-    )
-
-    # Create DataLoader (but we will not load the data in each epoch)
     train_loader = DataLoader(
         dataset=train_dataset,
         batch_size=BATCH_SIZE,
@@ -119,41 +94,34 @@ def main():
         drop_last=True,
     )
 
-    test_loader = DataLoader(
-        dataset=test_dataset,
-        batch_size=BATCH_SIZE,
-        num_workers=NUM_WORKERS,
-        pin_memory=PIN_MEMORY,
-        shuffle=True,
-        drop_last=True,
-    )
-
-    # Pre-load all data into memory for training
-    train_data = list(train_loader)  # Load data into memory once
-    test_data = list(test_loader)  # Load data into memory once
-
     for epoch in range(EPOCHS):
+        print(f"Epoch {epoch + 1}/{EPOCHS}")
+        start_time = time.time()
+
         # Track performance on train set
         pred_boxes, target_boxes = get_bboxes(
-            train_data, model, iou_threshold=0.5, threshold=0.4
+            train_loader, model, iou_threshold=0.5, confidence=0.4
         )
 
         mean_avg_prec = mean_average_precision(
-            pred_boxes, target_boxes, iou_threshold=0.5, box_format="midpoint"
+            pred_boxes, target_boxes, iou_threshold=0.5, num_class = 20
         )
         print(f"Train mAP: {mean_avg_prec}")
 
-        # Training loop, use pre-loaded data
-        train_fn(train_data, model, optimizer, loss_fn)
+        # Training loop
+        train_fn(train_loader, model, optimizer, loss_fn)
 
-        # Save model after every epoch
-        checkpoint = {
-            "state_dict": model.state_dict(),
-            "optimizer": optimizer.state_dict(),
-        }
-        save_checkpoint(checkpoint, filename=LOAD_MODEL_FILE)
+        end_time = time.time()
+        print(f"Epoch {epoch + 1} completed in {end_time - start_time:.2f} seconds")
 
-        
+        # Save model
+        if epoch % 5 == 0:
+            checkpoint = {
+                "state_dict": model.state_dict(),
+                "optimizer": optimizer.state_dict(),
+            }
+            save_checkpoint(checkpoint, filename=LOAD_MODEL_FILE)
+
 
 if __name__ == "__main__":
     main()
