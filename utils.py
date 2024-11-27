@@ -28,7 +28,7 @@ def iou( boxes_preds,boxes_lables):
     IOU = intersection /(box1_area+box2_area - intersection + 1e-6)
     return IOU
 
-def non_max_suppression(bboxes,iou_threshold,confident):
+def non_max_suppression(bboxes,iou_threshold,confident): #** note
     #ensure bboxes is list
     #format of bboxes is [x,y,w,h,confident,class_pred]
     assert type(bboxes) ==list
@@ -74,7 +74,7 @@ def get_bboxes(loader,model,iou_threshold,confidence,device="cuda"):
             )
             
             for nms_box in nms_boxes:
-                all_pred_boxes.append([train_idx]+nms_box)
+                all_pred_boxes.append([train_idx]+nms_box) #size of nms_box is [train_idx, x,y,w,h,confidence,class_pred]
                 
             for box in true_bboxes[idx]:
                 if box[4]>0:
@@ -130,3 +130,88 @@ def load_checkpoint(checkpoint, model, optimizer):
     model.load_state_dict(checkpoint["state_dict"])
     optimizer.load_state_dict(checkpoint["optimizer"])
         
+def mean_average_precision(pred_boxes,true_boxes,iou_threshold,num_class):
+    average_precisions=[]
+    epsilon = 1e-6
+    for c in range(num_class):
+        detections =[]
+        ground_truths =[]
+        
+        for detection in pred_boxes:
+            if detection[6] == c: #size of detection is [train_idx,x,y,w,h,confidence,class_pred]
+                detections.append(detection)
+                
+        for true_box in true_boxes:
+            if true_box[6] == c:
+                ground_truths.append(true_box)
+                
+        amount_bboxes = Counter([gt[0] for gt in ground_truths]) #count the number of bboxes in each image
+        for key, val in amount_bboxes.items():
+            amount_bboxes[key] = torch.zeros(val) #create tensor with zeros for each bbox in each image
+            
+        detections.sort(key=lambda x:x[5],reverse=True) #sort the detections by confidence in descending order        
+        TP = torch.zeros((len(detections)))
+        FP = torch.zeros((len(detections)))
+        total_true_bboxes = len(ground_truths)
+        
+        if total_true_bboxes ==0:
+            continue
+        
+        for detection_idx,detection in enumerate(detections):
+            ground_truth_img = [
+                bbox for bbox in ground_truths if bbox[0] == detection[0]
+            ] #get all bboxes in the same image
+            
+            num_gts = len(ground_truth_img)
+            best_iou = 0
+            
+            for idx, gt in enumerate(ground_truth_img):
+                iou_score = iou(
+                    torch.tensor(detection[1:5]),torch.tensor(gt[1:5])
+                )
+                
+                if iou_score > best_iou:
+                    best_iou = iou_score
+                    best_gt_idx = idx
+                    
+                if best_iou > iou_threshold:
+                    if amount_bboxes[detection[0]][best_gt_idx] == 0:
+                        TP[detection_idx] =1
+                        amount_bboxes[detection[0]][best_gt_idx] = 1 #mark as already detected
+                    else:
+                        FP[detection_idx] =1
+                else:
+                    FP[detection_idx] =1
+        TP_cumsum = torch.cumsum(TP,dim=0) #calculate the cumulative sum of TP
+        FP_cumsum = torch.cumsum(FP,dim=0)
+        precisions =torch.div(TP_cumsum,(TP_cumsum+FP_cumsum+epsilon))
+        precisions = torch.cat((torch.tensor([1]),precisions)) #add 1 to the beginning of precisions
+        recalls = torch.div(TP_cumsum,(total_true_bboxes+epsilon))
+        recalls = torch.cat((torch.tensor([0]),recalls))
+        
+        average_precisions.append(torch.trapz(precisions,recalls)) #calculate the area under the curve
+    return sum(average_precisions)/len(average_precisions)
+
+def plot_image(image,boxes):
+    im = np.array(image)
+    height,width,_ = im.shape
+    fig,ax = plt.subplots(1)
+    ax.imshow(im)
+    for box in boxes:
+        x,y,w,h,confidence,class_pred = box
+        x = x * width
+        y = y * height
+        w = w * width
+        h = h * height
+        color = (0,255,0)
+        rect = patches.Rectangle((x-w/2,y-h/2),w,h,linewidth=2,edgecolor=color,facecolor="none")
+        ax.add_patch(rect)
+        plt.text(x-w/2,y-h/2,s=class_pred, color="white")
+    plt.show()
+    
+        
+        
+        
+                    
+                
+                    
