@@ -12,20 +12,9 @@ class YoloLoss(nn.Module):
         self.lambda_coord = 5
 
     def forward(self, predictions, target):
-        predictions = predictions.reshape(-1, self.S, self.S, self.B * 5 + self.C)
-        # Calculate IoUs
-        iou_b1 = iou(predictions[..., 0:4], target[..., 0:4])
-        iou_b2 = iou(predictions[..., 5:9], target[..., 0:4])
-        ious = torch.cat([iou_b1.unsqueeze(0), iou_b2.unsqueeze(0)], dim=0)
-        _, bestbox = torch.max(ious, dim=0)  # Best box is 1 or 0
-        exists_box = target[..., 20].unsqueeze(3)
-
+        exists_box = (target[..., 4:5] > 0).float()
         # Box Predictions and Targets
-        box_predictions = torch.where(
-            bestbox.unsqueeze(-1) == 1,
-            predictions[..., 5:9],
-            predictions[..., 0:4],
-        )
+        box_predictions = predictions[..., 0:4] 
         box_targets = exists_box * target[..., 0:4]
 
         # Numerical Stability for sqrt
@@ -39,25 +28,22 @@ class YoloLoss(nn.Module):
         )
 
         # Object Loss
-        box_predictions_conf = torch.where(
-            bestbox.unsqueeze(-1) == 1,
-            predictions[..., 9:10],
-            predictions[..., 4:5],
-        )
+        box_predictions_conf = predictions[..., 4:5]
         object_loss = torch.mean(
             (exists_box * box_predictions_conf - exists_box * target[..., 4:5]) ** 2
         )
 
         # No Object Loss
         no_object_loss = torch.mean(
-            (1 - exists_box) * (predictions[..., [4, 9]] - target[..., 4:5].unsqueeze(-1)) ** 2
+            (1 - exists_box) * (predictions[..., 4:5] - target[..., 4:5]) ** 2
         )
 
         # Class Loss
         class_loss = torch.mean(
-            (exists_box * predictions[..., 10:10 + self.C] - exists_box * target[..., 10:10 + self.C]) ** 2
+            (exists_box * predictions[..., 5:5 + self.C] - exists_box * target[..., 5:5 + self.C]) ** 2
         )
 
         # Total Loss
         loss = box_loss + object_loss + self.lambda_noobj * no_object_loss + class_loss
         return loss
+    

@@ -4,29 +4,33 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 from collections import Counter
 
-def iou( boxes_preds,boxes_lables):
-    #convert x,y,w,h to x1,y1,x2,y2
-    box1_x1 = boxes_preds[...,0:1] - boxes_preds[...,2:3]/2
-    box1_y1 = boxes_preds[...,1:2]- boxes_preds[...,3:4]/2
-    box1_x2 = boxes_preds[...,0:1] + boxes_preds[...,2:3]/2
-    box1_y2 = boxes_preds[...,1:2] + boxes_preds[...,3:4]/2
-    box2_x1 = boxes_lables[...,0:1] - boxes_lables[...,2:3]/2
-    box2_y1 = boxes_lables[...,1:2] - boxes_lables[...,3:4]/2
-    box2_x2 = boxes_lables[...,0:1] + boxes_lables[...,2:3]/2
-    box2_y2 = boxes_lables[...,1:2] + boxes_lables[...,3:4]/2
-    #find the intersection area
-    x1= torch.max(box1_x1,box2_x1)
-    y1= torch.max[box1_y1,box2_y1]
-    x2=torch.min(box1_x2,box2_x2)
-    y2=torch.min(box1_y2,box2_y2)
-    #calculate the area of intersection
-    intersection = (x2-x1).clamp(0) * (y2-y1).clamp(0)
-    #calculate the area of both boxes
+def iou(boxes_preds, boxes_labels):
+    # Convert x, y, w, h to x1, y1, x2, x2
+    box1_x1 = boxes_preds[..., 0:1] - boxes_preds[..., 2:3] / 2
+    box1_y1 = boxes_preds[..., 1:2] - boxes_preds[..., 3:4] / 2
+    box1_x2 = boxes_preds[..., 0:1] + boxes_preds[..., 2:3] / 2
+    box1_y2 = boxes_preds[..., 1:2] + boxes_preds[..., 3:4] / 2
+    box2_x1 = boxes_labels[..., 0:1] - boxes_labels[..., 2:3] / 2
+    box2_y1 = boxes_labels[..., 1:2] - boxes_labels[..., 3:4] / 2
+    box2_x2 = boxes_labels[..., 0:1] + boxes_labels[..., 2:3] / 2
+    box2_y2 = boxes_labels[..., 1:2] + boxes_labels[..., 3:4] / 2
+
+    # Find the intersection area
+    x1 = torch.max(box1_x1, box2_x1)
+    y1 = torch.max(box1_y1, box2_y1)
+    x2 = torch.min(box1_x2, box2_x2)
+    y2 = torch.min(box1_y2, box2_y2)
+
+    # Calculate the area of intersection
+    intersection = (x2 - x1).clamp(0) * (y2 - y1).clamp(0)
+
+    # Calculate the area of both boxes
     box1_area = abs(box1_x2 - box1_x1) * abs(box1_y2 - box1_y1)
     box2_area = abs(box2_x2 - box2_x1) * abs(box2_y2 - box2_y1)
-    #calculate IOU
-    IOU = intersection /(box1_area+box2_area - intersection + 1e-6)
-    return IOU
+
+    # Calculate IOU
+    iou = intersection / (box1_area + box2_area - intersection + 1e-6)
+    return iou
 
 def non_max_suppression(bboxes,iou_threshold,confident): #** note
     #ensure bboxes is list

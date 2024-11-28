@@ -4,7 +4,6 @@ import torchvision.transforms as transforms
 from torch.utils.data import DataLoader
 from modelYOLOV1 import Yolov1
 from dataset import YOLODataset, classes
-import time
 from utils import (
     non_max_suppression,
     mean_average_precision,
@@ -18,6 +17,7 @@ from utils import (
 from loss import YoloLoss
 from tqdm import tqdm
 import os
+import time
 
 seed = 123
 torch.manual_seed(seed)
@@ -25,27 +25,25 @@ torch.manual_seed(seed)
 # Hyperparameters etc.
 LEARNING_RATE = 2e-5
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-BATCH_SIZE = 8  # Adjust based on your GPU memory
+BATCH_SIZE = 8  
 WEIGHT_DECAY = 0
 EPOCHS = 10
-NUM_WORKERS = 4  # Increase the number of workers for faster data loading
+NUM_WORKERS = 4 
 PIN_MEMORY = True
-LOAD_MODEL = False  # Set to False since it's your first time training
+LOAD_MODEL = False  
 LOAD_MODEL_FILE = "overfit.pt"
 IMG_DIR = r"C:\Users\ASUS\Downloads\YoloV1-demo-Kien\YoloV1-demo-Kien\data\train"
 LABEL_DIR = r"C:\Users\ASUS\Downloads\YoloV1-demo-Kien\YoloV1-demo-Kien\data\train_labels"
-# Transformations for input data
 transform = transforms.Compose([transforms.Resize((448, 448)), transforms.ToTensor()])
 
 def train_fn(train_loader, model, optimizer, loss_fn):
     loop = tqdm(train_loader, leave=True, desc='Training')
     mean_loss = []
-
     for batch_idx, (x, y) in enumerate(loop):
         x, y = x.to(DEVICE), y.to(DEVICE)
-        out = model(x)
-        loss = loss_fn(out, y)
-        mean_loss.append(loss.item())
+        out = model.predict(x, _nms = 0.5, _conf = 0.4)
+        loss = loss_fn.forward(out,y)
+        mean_loss.append(loss)
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
@@ -59,7 +57,7 @@ def main():
     class_mapping = {cls: idx for idx, cls in enumerate(classes)}
 
     # Initialize the model
-    model = Yolov1(split_size=7, num_boxes=2, num_classes=20).to(DEVICE)
+    model = Yolov1(S=7, B=2, C=20).to(DEVICE)
     optimizer = optim.Adam(
         model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY
     )
@@ -73,10 +71,25 @@ def main():
         else:
             print(f"Checkpoint file {LOAD_MODEL_FILE} not found. Starting fresh.")
 
+    # Load image and label files
+    img_files = [f for f in os.listdir(IMG_DIR) if f.endswith('.jpg')]
+    label_files = [f.replace('.jpg', '.txt') for f in img_files]
+
     # Load datasets
     train_dataset = YOLODataset(
-        img_files=[f for f in os.listdir(IMG_DIR)],
-        label_files=[f for f in os.listdir(LABEL_DIR)],
+        img_files=img_files,
+        label_files=label_files,
+        img_dir=IMG_DIR,
+        label_dir=LABEL_DIR,
+        S=7,
+        B=2,
+        C=20,
+        transform=transform,
+    )
+
+    test_dataset = YOLODataset(
+        img_files=img_files,
+        label_files=label_files,
         img_dir=IMG_DIR,
         label_dir=LABEL_DIR,
         S=7,
@@ -94,6 +107,15 @@ def main():
         drop_last=True,
     )
 
+    test_loader = DataLoader(
+        dataset=test_dataset,
+        batch_size=BATCH_SIZE,
+        num_workers=NUM_WORKERS,
+        pin_memory=PIN_MEMORY,
+        shuffle=True,
+        drop_last=True,
+    )
+
     for epoch in range(EPOCHS):
         print(f"Epoch {epoch + 1}/{EPOCHS}")
         start_time = time.time()
@@ -104,7 +126,7 @@ def main():
         )
 
         mean_avg_prec = mean_average_precision(
-            pred_boxes, target_boxes, iou_threshold=0.5, num_class = 20
+            pred_boxes, target_boxes, iou_threshold=0.5, num_class=20
         )
         print(f"Train mAP: {mean_avg_prec}")
 

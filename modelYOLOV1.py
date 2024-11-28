@@ -1,11 +1,6 @@
-"""
-Implementation of Yolo (v1) architecture
-with slight modification with added BatchNorm.
-"""
-
 import torch
 import torch.nn as nn
-
+from utils import iou, non_max_suppression
 """ 
 Information about architecture config:
 Tuple is structured by (kernel_size, filters, stride, padding) 
@@ -47,8 +42,11 @@ class CNNBlock(nn.Module):
 
 
 class Yolov1(nn.Module):
-    def __init__(self, in_channels=3, **kwargs):
+    def __init__(self, in_channels=3, S=7, B=2, C=20, **kwargs):
         super(Yolov1, self).__init__()
+        self.S = S
+        self.B = B
+        self.C = C
         self.architecture = architecture_config
         self.in_channels = in_channels
         self.darknet = self._create_conv_layers(self.architecture)
@@ -61,7 +59,6 @@ class Yolov1(nn.Module):
     def _create_conv_layers(self, architecture):
         layers = []
         in_channels = self.in_channels
-
         for x in architecture:
             if type(x) == tuple:
                 layers += [
@@ -102,18 +99,49 @@ class Yolov1(nn.Module):
 
         return nn.Sequential(*layers)
 
-    def _create_fcs(self, split_size, num_boxes, num_classes):
-        S, B, C = split_size, num_boxes, num_classes
-
-        # In original paper this should be
-        # nn.Linear(1024*S*S, 4096),
-        # nn.LeakyReLU(0.1),
-        # nn.Linear(4096, S*S*(B*5+C))
-
+    def _create_fcs(self):
         return nn.Sequential(
             nn.Flatten(),
-            nn.Linear(1024 * S * S, 496),
+            nn.Linear(1024 * self.S * self.S, 4096),
             nn.Dropout(0.0),
             nn.LeakyReLU(0.1),
-            nn.Linear(496, S * S * (C + B * 5)),
+            nn.Linear(4096, self.S * self.S * (self.C + self.B * 5)),
         )
+    
+    def predict(self, x, _nms, _conf):
+        predictions = self.forward(x) 
+        predictions = predictions.view(-1, self.S, self.S, self.B * 5 + self.C)
+
+        all_boxes = []
+        for i in range(predictions.size(0)):  # Batch size
+            boxes = []
+            for j in range(self.S):  # Grid cells
+                for k in range(self.S):  # Grid cells (y-axis)
+                    for b in range(self.B):  # Bounding boxes
+                        # Lấy giá trị bounding box
+                        bbox = predictions[i, j, k, b*5:(b+1)*5]
+                        x_center, y_center, w, h, confidence = bbox[0], bbox[1], bbox[2], bbox[3], bbox[4]
+                        confidence = torch.sigmoid(confidence)
+
+                        # Lấy class probabilities
+                        class_probs = torch.sigmoid(predictions[i, j, k, self.B * 5:])  # C classes
+                        class_scores = confidence * class_probs  # Broadcast cho mỗi class
+
+                        # Tạo dictionary box
+                        box = {
+                            'x_center': x_center.item(),
+                            'y_center': y_center.item(),
+                            'w': w.item(),
+                            'h': h.item(),
+                            'confidence': confidence.item(),
+                            'class_scores': class_scores.tolist()
+                        }
+                        boxes.append(box)
+
+            # Áp dụng Non-Max Suppression
+            boxes = non_max_suppression(boxes, _nms, _conf)
+            all_boxes.append(boxes)
+
+        return all_boxes
+
+    
