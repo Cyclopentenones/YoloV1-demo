@@ -62,16 +62,21 @@ class YOLODataset(Dataset):
         boxes = []
         with open(label_path, "r") as f:
             for label in f.readlines():
-                class_label, x, y, width, height, confidence = [
+                values = [
                     float(val) if "." in val else int(val)
                     for val in label.strip().split()
                 ]
-                boxes.append([class_label, x, y, width, height, confidence])
+                class_label, x, y, width, height = values[:5]
+                boxes.append([class_label, x, y, width, height])
         boxes = torch.tensor(boxes)
 
         # Áp dụng transform nếu có
         if self.transform:
             image, boxes = self.apply_transforms(image, boxes)
+
+        # Chuyển đổi hình ảnh thành tensor nếu không áp dụng transform
+        if not self.transform:
+            image = transforms.ToTensor()(image)
 
         # Tạo ma trận nhãn
         label_matrix = self.create_label_matrix(boxes)
@@ -92,19 +97,21 @@ class YOLODataset(Dataset):
     def create_label_matrix(self, boxes):
         label_matrix = torch.zeros((self.S, self.S, self.C + 5 * self.B))
         for box in boxes:
-            class_label, x, y, width, height, _ = box.tolist()
+            class_label, x, y, width, height = box.tolist()
             class_label = int(class_label)
 
             i, j = int(self.S * y), int(self.S * x)
             x_cell, y_cell = self.S * x - j, self.S * y - i
             width_cell, height_cell = width * self.S, height * self.S
 
-            if label_matrix[i, j, 20] == 0:
-                label_matrix[i, j, 20] = 1
-                label_matrix[i, j, 21:25] = torch.tensor(
+            if label_matrix[i, j, 4] == 0:  # Thay đổi từ 20 thành 4
+                label_matrix[i, j, 4] = 1  # Thay đổi từ 20 thành 4
+                label_matrix[i, j, 0:4] = torch.tensor(
                     [x_cell, y_cell, width_cell, height_cell]
                 )
-                label_matrix[i, j, class_label] = 1
+                label_matrix[i, j, 5 + class_label] = (
+                    1  # Thay đổi từ class_label thành 5 + class_label
+                )
 
         return label_matrix
 
@@ -147,27 +154,75 @@ class YOLODataset(Dataset):
         cv2.destroyAllWindows()
 
 
-def test():
-    img_files = ["2008_000008.jpg", "2008_000003.jpg"]
-    label_files = ["2008_000008.txt", "2008_000003.txt"]
-    img_dir = "E:\\NCKH\\babykiller\\YoloV1-demo\\data\\train"
-    label_dir = "E:\\NCKH\\babykiller\\YoloV1-demo\\data\\train_labels"
-    S, B, C = 7, 2, 20
+import os
+import torch
+import cv2
+import pytest
+from dataset import YOLODataset
 
-    dataset = YOLODataset(img_files, label_files, img_dir, label_dir, S, B, C)
 
-    # Test đọc dữ liệu
-    img, target = dataset[0]
-    print("Image shape:", img.shape)
-    print("Label matrix shape:", target.shape)
+@pytest.fixture
+def sample_data(tmpdir):
+    img_dir = tmpdir.mkdir("images")
+    label_dir = tmpdir.mkdir("labels")
 
-    # Test vẽ boxes
-    dataset.draw_boxes(
-        os.path.join(img_dir, img_files[0]), os.path.join(label_dir, label_files[0])
+    img_file = img_dir.join("sample.jpg")
+    label_file = label_dir.join("sample.txt")
+
+    # Create a dummy image
+    image = torch.randint(0, 255, (448, 448, 3), dtype=torch.uint8).numpy()
+    cv2.imwrite(str(img_file), image)
+
+    # Create a dummy label
+    with open(label_file, "w") as f:
+        f.write("0 0.5 0.5 0.2 0.2\n")
+
+    return [str(img_file)], [str(label_file)], str(img_dir), str(label_dir)
+
+
+def test_yolo_dataset_length(sample_data):
+    img_files, label_files, img_dir, label_dir = sample_data
+    dataset = YOLODataset(img_files, label_files, img_dir, label_dir, S=7, B=2, C=20)
+    assert len(dataset) == 1
+
+
+def test_yolo_dataset_getitem(sample_data):
+    img_files, label_files, img_dir, label_dir = sample_data
+    dataset = YOLODataset(img_files, label_files, img_dir, label_dir, S=7, B=2, C=20)
+    image, label_matrix = dataset[0]
+
+    assert isinstance(image, torch.Tensor)
+    assert image.shape == (3, 448, 448)
+    assert isinstance(label_matrix, torch.Tensor)
+    assert label_matrix.shape == (7, 7, 30)
+
+
+def test_yolo_dataset_transform(sample_data):
+    img_files, label_files, img_dir, label_dir = sample_data
+    dataset = YOLODataset(
+        img_files, label_files, img_dir, label_dir, S=7, B=2, C=20, transform=True
     )
-    img1, target = dataset[0]
-    print(img1.shape, target.shape)
+    image, label_matrix = dataset[0]
+
+    assert isinstance(image, torch.Tensor)
+    assert image.shape == (3, 448, 448)
+    assert isinstance(label_matrix, torch.Tensor)
+    assert label_matrix.shape == (7, 7, 30)
+
+
+def test_yolo_dataset_no_transform(sample_data):
+    img_files, label_files, img_dir, label_dir = sample_data
+    dataset = YOLODataset(
+        img_files, label_files, img_dir, label_dir, S=7, B=2, C=20, transform=False
+    )
+    image, label_matrix = dataset[0]
+
+    # Ensure the image has the correct tensor shape (3, 448, 448)
+    assert isinstance(image, torch.Tensor)
+    assert image.shape == (3, 448, 448)  # Correct format for PyTorch
+    assert isinstance(label_matrix, torch.Tensor)
+    assert label_matrix.shape == (7, 7, 30)
 
 
 if __name__ == "__main__":
-    test()
+    pytest.main([__file__])
