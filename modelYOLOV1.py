@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 from utils import iou, non_max_suppression
+
 """ 
 Information about architecture config:
 Tuple is structured by (kernel_size, filters, stride, padding) 
@@ -50,7 +51,7 @@ class Yolov1(nn.Module):
         self.architecture = architecture_config
         self.in_channels = in_channels
         self.darknet = self._create_conv_layers(self.architecture)
-        self.fcs = self._create_fcs(**kwargs)
+        self.fcs = self._create_fcs()
 
     def forward(self, x):
         x = self.darknet(x)
@@ -63,7 +64,11 @@ class Yolov1(nn.Module):
             if type(x) == tuple:
                 layers += [
                     CNNBlock(
-                        in_channels, x[1], kernel_size=x[0], stride=x[2], padding=x[3],
+                        in_channels,
+                        x[1],
+                        kernel_size=x[0],
+                        stride=x[2],
+                        padding=x[3],
                     )
                 ]
                 in_channels = x[1]
@@ -102,14 +107,14 @@ class Yolov1(nn.Module):
     def _create_fcs(self):
         return nn.Sequential(
             nn.Flatten(),
-            nn.Linear(1024 * self.S * self.S, 4096),
+            nn.Linear(1024 * 7 * 7, 4096),  # Đảm bảo kích thước đúng
             nn.Dropout(0.0),
             nn.LeakyReLU(0.1),
             nn.Linear(4096, self.S * self.S * (self.C + self.B * 5)),
         )
-    
+
     def predict(self, x, _nms, _conf):
-        predictions = self.forward(x) 
+        predictions = self.forward(x)
         predictions = predictions.view(-1, self.S, self.S, self.B * 5 + self.C)
 
         all_boxes = []
@@ -119,23 +124,23 @@ class Yolov1(nn.Module):
                 for k in range(self.S):  # Grid cells (y-axis)
                     for b in range(self.B):  # Bounding boxes
                         # Lấy giá trị bounding box
-                        bbox = predictions[i, j, k, b*5:(b+1)*5]
-                        x_center, y_center, w, h, confidence = bbox[0], bbox[1], bbox[2], bbox[3], bbox[4]
-                        confidence = torch.sigmoid(confidence)
+                        bbox = predictions[i, j, k, b * 5 : (b + 1) * 5]
+                        x_center, y_center, w, h, confidence = (
+                            bbox[0].item(),
+                            bbox[1].item(),
+                            bbox[2].item(),
+                            bbox[3].item(),
+                            torch.sigmoid(bbox[4]).item(),
+                        )
 
                         # Lấy class probabilities
-                        class_probs = torch.sigmoid(predictions[i, j, k, self.B * 5:])  # C classes
-                        class_scores = confidence * class_probs  # Broadcast cho mỗi class
+                        class_probs = torch.sigmoid(
+                            predictions[i, j, k, self.B * 5 :]  # C classes
+                        )
+                        class_scores = (confidence * class_probs).tolist()
 
-                        # Tạo dictionary box
-                        box = {
-                            'x_center': x_center.item(),
-                            'y_center': y_center.item(),
-                            'w': w.item(),
-                            'h': h.item(),
-                            'confidence': confidence.item(),
-                            'class_scores': class_scores.tolist()
-                        }
+                        # Tạo box dưới dạng list
+                        box = [x_center, y_center, w, h, confidence] + class_scores
                         boxes.append(box)
 
             # Áp dụng Non-Max Suppression
@@ -144,4 +149,39 @@ class Yolov1(nn.Module):
 
         return all_boxes
 
-    
+
+# import unittest
+# from modelYOLOV1 import Yolov1
+
+
+# class TestYolov1(unittest.TestCase):
+#     def setUp(self):
+#         self.model = Yolov1()
+#         self.input_tensor = torch.randn(
+#             (1, 3, 448, 448)
+#         )  # Batch size of 1, 3 channels, 448x448 image
+
+#     def test_forward_pass(self):
+#         output = self.model(self.input_tensor)
+#         self.assertEqual(output.shape, (1, 7 * 7 * (20 + 2 * 5)))
+
+#     def test_predict(self):
+#         _nms = 0.5
+#         _conf = 0.4
+#         predictions = self.model.predict(self.input_tensor, _nms, _conf)
+#         self.assertIsInstance(predictions, list)
+#         self.assertIsInstance(predictions[0], list)
+#         if len(predictions[0]) > 0:
+#             self.assertIsInstance(predictions[0][0], dict)
+#             self.assertIn("x_center", predictions[0][0])
+#             self.assertIn("y_center", predictions[0][0])
+#             self.assertIn("w", predictions[0][0])
+#             self.assertIn("h", predictions[0][0])
+#             self.assertIn("confidence", predictions[0][0])
+#             self.assertIn("class_scores", predictions[0][0])
+#         else:
+#             print("No boxes detected, check the confidence threshold.")
+
+
+# if __name__ == "__main__":
+#     unittest.main()
