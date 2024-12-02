@@ -16,14 +16,12 @@ class YoloLoss(nn.Module):
     def forward(self, predictions, target):
         predictions = predictions.reshape(-1, self.S, self.S, self.C + self.B * 5)
 
-        # Calculate IoU for the two predicted bounding boxes with target bbox
         iou_b1 = iou(predictions[..., 21:25], target[..., 21:25])
         iou_b2 = iou(predictions[..., 26:30], target[..., 21:25])
         ious = torch.cat([iou_b1.unsqueeze(0), iou_b2.unsqueeze(0)], dim=0)
         iou_maxes, bestbox = torch.max(ious, dim=0)
-        exists_box = target[..., 20].unsqueeze(3)  # Identity object (Iobj_i)
+        exists_box = target[..., 20].unsqueeze(3)  
 
-        # Box coordinates
         box_predictions = exists_box * (
             (
                 bestbox * predictions[..., 26:30]
@@ -42,8 +40,6 @@ class YoloLoss(nn.Module):
             torch.flatten(box_predictions, end_dim=-2),
             torch.flatten(box_targets, end_dim=-2),
         )
-
-        # Object loss
         pred_box = (
             bestbox * predictions[..., 25:26] + (1 - bestbox) * predictions[..., 20:21]
         )
@@ -53,7 +49,6 @@ class YoloLoss(nn.Module):
             torch.flatten(exists_box * target[..., 20:21]),
         )
 
-        # No object loss
         no_object_loss = self.mse(
             torch.flatten((1 - exists_box) * predictions[..., 20:21], start_dim=1),
             torch.flatten((1 - exists_box) * target[..., 20:21], start_dim=1),
@@ -63,7 +58,6 @@ class YoloLoss(nn.Module):
             torch.flatten((1 - exists_box) * target[..., 20:21], start_dim=1),
         )
 
-        # Class loss
         class_loss = self.mse(
             torch.flatten(exists_box * predictions[..., :20], end_dim=-2),
             torch.flatten(exists_box * target[..., :20], end_dim=-2),

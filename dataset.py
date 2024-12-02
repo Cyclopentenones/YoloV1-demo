@@ -46,19 +46,18 @@ class YOLODataset(Dataset):
         return len(self.img_files)
 
     def __getitem__(self, index):
-        # Đọc đường dẫn hình ảnh và nhãn
         img_path = os.path.join(self.img_dir, self.img_files[index])
         label_path = os.path.join(self.label_dir, self.label_files[index])
 
-        # Kiểm tra tệp tồn tại
+
         assert os.path.exists(img_path), f"Image file not found: {img_path}"
         assert os.path.exists(label_path), f"Label file not found: {label_path}"
 
-        # Đọc và chuyển đổi hình ảnh
+
         image = cv2.imread(img_path)
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
 
-        # Đọc tệp nhãn
+
         boxes = []
         with open(label_path, "r") as f:
             for label in f.readlines():
@@ -69,11 +68,10 @@ class YOLODataset(Dataset):
                 boxes.append([class_label, x, y, width, height, confidence])
         boxes = torch.tensor(boxes)
 
-        # Áp dụng transform nếu có
         if self.transform:
             image, boxes = self.apply_transforms(image, boxes)
 
-        # Tạo ma trận nhãn
+
         label_matrix = self.create_label_matrix(boxes)
 
         return image, label_matrix
@@ -97,22 +95,20 @@ class YOLODataset(Dataset):
 
             i, j = int(self.S * y), int(self.S * x)
             x_cell, y_cell = self.S * x - j, self.S * y - i
-            width_cell, height_cell = width * self.S, height * self.S
 
-            if label_matrix[i, j, 4] == 0:  # Thay đổi từ 20 thành 4
-                label_matrix[i, j, 4] = 1  # Thay đổi từ 20 thành 4
+            if label_matrix[i, j, 4] == 0: 
+                label_matrix[i, j, 4] = 1  
                 label_matrix[i, j, 0:4] = torch.tensor(
-                    [x_cell, y_cell, width_cell, height_cell]
+                    [x_cell, y_cell, width, height]
                 )
-                label_matrix[i, j, 5 + class_label] = 1  # Thay đổi từ class_label thành 5 + class_label
+                label_matrix[i, j, 5 + class_label] = 1 
 
         return label_matrix
 
     def draw_boxes(self, image_path, label_path):
-        # Đọc hình ảnh
+
         image = cv2.imread(image_path)
 
-        # Kiểm tra tệp tồn tại
         assert os.path.exists(label_path), f"Label file not found: {label_path}"
 
         with open(label_path, "r") as f:
@@ -127,10 +123,9 @@ class YOLODataset(Dataset):
                 xmax = int((x_center + bbox_width / 2) * w)
                 ymax = int((y_center + bbox_height / 2) * h)
 
-                # Vẽ bounding box
+  
                 cv2.rectangle(image, (xmin, ymin), (xmax, ymax), (0, 255, 0), 2)
 
-                # Thêm nhãn class
                 label = f"{classes[cls_id]}: {confidence:.2f}"
                 cv2.putText(
                     image,
